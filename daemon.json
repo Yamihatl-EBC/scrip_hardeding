@@ -1,0 +1,4 @@
+{
+    "data-root": "/u01/docker_installation",
+    "insecure-registries":["172.31.100.23:5000"]
+}

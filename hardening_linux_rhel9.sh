@@ -3,6 +3,8 @@
 echo "Actualizando paquetes"
 yum update -y
 yum install -y wget 
+yum install java -y
+subscription-manager register --username adminebc --password v6AonU3Iy8dF --auto-attach
 yum install -y policycoreutils-python
 #sudo dnf config-manager --add-repo=https://download.docker.com/linux/centos/docker-ce.repo
 #sudo dnf list docker-ce

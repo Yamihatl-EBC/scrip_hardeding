@@ -1,4 +1,4 @@
-#       $OpenBSD: sshd_config,v 1.103 2018/04/09 20:41:22 tj Exp $
+#	$OpenBSD: sshd_config,v 1.103 2018/04/09 20:41:22 tj Exp $
 
 # This is the sshd server system-wide configuration file.  See
 # sshd_config(5) for more information.
@@ -32,9 +32,6 @@ HostKey /etc/ssh/ssh_host_ed25519_key
 # on command line.
 # Please, check manual pages for update-crypto-policies(8) and sshd_config(5).
 
-Ciphers aes128-ctr,aes192-ctr,aes256-ctr,aes128-gcm@openssh.com,aes256-gcm@openssh.com
-KexAlgorithms curve25519-sha256@libssh.org,ecdh-sha2-nistp256,ecdh-sha2-nistp384,ecdh-sha2-nistp521,diffie-hellman-group-exchange-sha256
-
 # Logging
 #SyslogFacility AUTH
 SyslogFacility AUTHPRIV
@@ -45,14 +42,14 @@ LogLevel VERBOSE
 #LoginGraceTime 2m
 PermitRootLogin no
 #StrictModes yes
-MaxAuthTries 2
+MaxAuthTries 3
 MaxSessions 2
 
 #PubkeyAuthentication yes
 
 # The default is to check both .ssh/authorized_keys and .ssh/authorized_keys2
 # but this is overridden so installations will only check .ssh/authorized_keys
-AuthorizedKeysFile .ssh/authorized_keys
+AuthorizedKeysFile	.ssh/authorized_keys
 
 #AuthorizedPrincipalsFile none
 
@@ -99,7 +96,7 @@ GSSAPICleanupCredentials no
 # If you just want the PAM account and session checks to run without
 # PAM authentication, then enable this but set PasswordAuthentication
 # and ChallengeResponseAuthentication to 'no'.
-# WARNING: 'UsePAM no' is not supported in Fedora and may cause several
+# WARNING: 'UsePAM no' is not supported in RHEL and may cause several
 # problems.
 UsePAM yes
 
@@ -120,7 +117,7 @@ TCPKeepAlive no
 #PermitUserEnvironment no
 Compression no
 #ClientAliveInterval 0
-ClientAliveCountMax 3
+ClientAliveCountMax 2
 #UseDNS no
 #PidFile /var/run/sshd.pid
 #MaxStartups 10:30:100
@@ -129,7 +126,7 @@ ClientAliveCountMax 3
 #VersionAddendum none
 
 # no default banner path
-#Banner none
+Banner /etc/issue
 
 # Accept locale-related environment variables
 AcceptEnv LANG LC_CTYPE LC_NUMERIC LC_TIME LC_COLLATE LC_MONETARY LC_MESSAGES
@@ -138,11 +135,11 @@ AcceptEnv LC_IDENTIFICATION LC_ALL LANGUAGE
 AcceptEnv XMODIFIERS
 
 # override default of no subsystems
-Subsystem sftp  /usr/libexec/openssh/sftp-server
+Subsystem	sftp	/usr/libexec/openssh/sftp-server
 
 # Example of overriding settings on a per-user basis
 #Match User anoncvs
-#       X11Forwarding no
-#       AllowTcpForwarding no
-#       PermitTTY no
-#       ForceCommand cvs serve
+#	X11Forwarding no
+#	AllowTcpForwarding no
+#	PermitTTY no
+#	ForceCommand cvs server

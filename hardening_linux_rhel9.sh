@@ -39,14 +39,35 @@ firewall-cmd --reload
 #Habilitando tmp
 echo "Montando tmp"
 systemctl enable tmp.mount
-
+#Banner Issue.net
+mv /etc/issue.net /etc/issue.netrnew
+cd /etc/
+wget https://raw.githubusercontent.com/Yamihatl-EBC/scrip_hardeding/dev/issue.net
+chmod 0644 /etc/issue.net
 #Banner Issue
 echo "Montando banner"
 mv /etc/issue /etc/issue.rnew
 cd /etc/
 wget https://raw.githubusercontent.com/Yamihatl-EBC/scrip_hardeding/dev/issue
 chmod 0644 /etc/issue 
-
+#limits
+echo "limits"
+mv /etc/security/limits.conf /etc/security/limits.confrew
+cd /etc/security/
+wget https://raw.githubusercontent.com/Yamihatl-EBC/scrip_hardeding/dev/limits.conf
+chmod 0644 /etc/security/limits.conf
+#Profile
+echo "profile"
+mv /etc/profile /etc/profile.rew
+cd /etc/
+wget https://raw.githubusercontent.com/Yamihatl-EBC/scrip_hardeding/dev/profile
+chmod 0644 /etc/profile
+#login.defs
+echo "defs_logins"
+mv /etc/login.defs /etc/login.defs.rew
+cd /etc/
+wget https://raw.githubusercontent.com/Yamihatl-EBC/scrip_hardeding/dev/login.defs
+chmod 0644 /etc/login.defs
 #SSH
 echo "Montando SSH"
 mv /etc/ssh/sshd_config /etc/ssh/ssh_config.new
@@ -108,4 +129,9 @@ chmod 700 /etc/cron.d /etc/cron.daily /etc/cron.hourly /etc/cron.weekly /etc/cro
 chmod 600 /etc/crontab /etc/cron.deny /boot/grub2/grub.cfg
 cat /etc/selinux/config | awk '/SELINUX=/ { $1 = "SELINUX=permissive" } { print }' /etc/selinux/config > /etc/selinux/config.new
 mv -f /etc/selinux/config.new /etc/selinux/config
+sudo systemctl enable tmp.mount
+timedatectl set-timezone  America/Mexico_City
+cd /etc/yum.repos.d/
+wget https://raw.githubusercontent.com/Yamihatl-EBC/scrip_hardeding/dev/cisofy-lynis.repo
+sudo yum install lynis -y
 #init 6

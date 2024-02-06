@@ -28,8 +28,8 @@ sudo service codedeploy-agent start
 #sudo systemctl start docker
 #sudo systemctl enable docker
 #cd /etc/docker/
-wget https://raw.githubusercontent.com/Yamihatl-EBC/scrip_hardeding/dev/daemon.json
-chmod 640 /etc/docker/daemon.json
+#wget https://raw.githubusercontent.com/Yamihatl-EBC/scrip_hardeding/dev/daemon.json
+#chmod 640 /etc/docker/daemon.json
 #mkdir /u01/docker_installation
 #sudo systemctl daemon-reload
 #systemctl restart docker	

@@ -72,7 +72,8 @@ chmod 0644 /etc/login.defs
 echo "Montando SSH"
 mv /etc/ssh/sshd_config /etc/ssh/ssh_config.new
 cd /etc/ssh/     
-wget https://raw.githubusercontent.com/Yamihatl-EBC/scrip_hardeding/dev/sshd_config
+wget https://raw.githubusercontent.com/Yamihatl-EBC/scrip_hardeding/dev/sshd_config_9
+mv /etc/ssh/sshd_config_9 /etc/ssh/ssh_config
 chmod 0600 /etc/ssh/sshd_config
 semanage port -a -t ssh_port_t -p tcp 22222
 cd /

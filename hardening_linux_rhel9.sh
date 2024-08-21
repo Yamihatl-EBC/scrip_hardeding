@@ -42,7 +42,7 @@ systemctl enable firewalld
 systemctl start firewalld
 firewall-cmd --permanent --zone=public --add-port=22222/tcp
 firewall-cmd --permanent --zone=public --add-port=443/tcp
-firewall-cmd --permanent --zone=public --add-port=161/tcp
+firewall-cmd --permanent --zone=public --add-port=161/udp
 firewall-cmd --reload
 
 #Habilitando tmp

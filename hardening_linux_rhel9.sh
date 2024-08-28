@@ -16,9 +16,9 @@ yum install java -y
 subscription-manager register --username adminebc --password v6AonU3Iy8dF --auto-attach
 yum install -y policycoreutils-python
 yum install net-snmp net-snmp-utils -y
-#sudo dnf config-manager --add-repo=https://download.docker.com/linux/centos/docker-ce.repo
-#sudo dnf list docker-ce
-#sudo dnf install docker-ce --nobest -y
+sudo dnf config-manager --add-repo=https://download.docker.com/linux/centos/docker-ce.repo
+sudo dnf list docker-ce
+sudo dnf install docker-ce --nobest -y
 sudo yum install ruby -y
 cd /home/ec2-user
 wget https://aws-codedeploy-us-east-1.s3.us-east-1.amazonaws.com/latest/install
@@ -26,14 +26,27 @@ chmod +x ./install
 sudo ./install auto
 sudo service codedeploy-agent status
 sudo service codedeploy-agent start
-#sudo systemctl start docker
-#sudo systemctl enable docker
-#cd /etc/docker/
-#wget https://raw.githubusercontent.com/Yamihatl-EBC/scrip_hardeding/dev/daemon.json
-#chmod 640 /etc/docker/daemon.json
-#mkdir /u01/docker_installation
-#sudo systemctl daemon-reload
-#systemctl restart docker	
+sudo systemctl start docker
+sudo systemctl enable docker
+cd /etc/docker/
+wget https://raw.githubusercontent.com/Yamihatl-EBC/scrip_hardeding/dev/daemon.json
+chmod 640 /etc/docker/daemon.json
+mkdir /u01/docker_installation
+sudo systemctl daemon-reload
+systemctl restart docker
+docker network create general-ebc-network
+mkdir -p /u01/nginx/certs
+mkdir -p /u01/nginx/conf 
+docker run --name nginx_ebc -dit --restart unless-stopped --network general-ebc-network -p 80:80 -p 443:443 -v /u01/nginx/conf:/etc/nginx/conf.d/ -v /u01/nginx/certs:/root -d nginx
+rpm -qa | grep net-snmp
+yum install net-snmp net-snmp-utils -y
+mv /etc/snmp/snmpd.conf /etc/snmp/snmpd.old
+cd /etc/snmp/
+wget https://raw.githubusercontent.com/Yamihatl-EBC/scrip_hardeding/dev/snmpd.conf
+systemctl enable snmpd
+systemctl restart snmpd
+
+sudo systemctl daemon-reload
 cd /
 
 #Instalando firewalld
@@ -44,6 +57,7 @@ systemctl start firewalld
 firewall-cmd --permanent --zone=public --add-port=22222/tcp
 firewall-cmd --permanent --zone=public --add-port=443/tcp
 firewall-cmd --permanent --zone=public --add-port=161/udp
+
 firewall-cmd --reload
 
 #Habilitando tmp

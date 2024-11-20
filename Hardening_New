@@ -1,0 +1,117 @@
+#!/bin/bash
+
+# Configuración inicial
+set -e  # Detener el script si ocurre algún error
+HARDENING_REPO="https://raw.githubusercontent.com/Yamihatl-EBC/scrip_hardeding/dev"
+AWSCLI_URL="https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip"
+SSM_AGENT_URL="https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/linux_amd64/amazon-ssm-agent.rpm"
+DOCKER_REPO="https://download.docker.com/linux/centos/docker-ce.repo"
+
+# Función para respaldar archivos
+backup_file() {
+    local file=$1
+    if [ -f "$file" ]; then
+        cp -p "$file" "${file}.bak_$(date +%F_%T)"
+        echo "Respaldo creado para $file"
+    fi
+}
+
+# Actualización de paquetes y dependencias esenciales
+echo "Actualizando paquetes y herramientas básicas..."
+sudo dnf update -y
+sudo dnf install -y wget unzip policycoreutils-python firewalld net-snmp net-snmp-utils sysstat psacct zip
+
+# Configuración de Amazon SSM Agent
+echo "Instalando Amazon SSM Agent..."
+sudo dnf install -y "$SSM_AGENT_URL"
+sudo systemctl enable --now amazon-ssm-agent
+
+# Instalación de AWS CLI
+echo "Instalando AWS CLI..."
+curl -s "$AWSCLI_URL" -o "awscliv2.zip"
+unzip -q awscliv2.zip && sudo ./aws/install
+rm -rf awscliv2.zip aws
+
+# Configuración de Docker
+echo "Instalando y configurando Docker..."
+if ! rpm -q docker-ce > /dev/null; then
+    sudo dnf config-manager --add-repo="$DOCKER_REPO"
+    sudo dnf install -y docker-ce --nobest
+    sudo systemctl enable --now docker
+fi
+
+# Configuración de red y firewalld
+echo "Configurando firewalld..."
+sudo systemctl enable --now firewalld
+sudo firewall-cmd --permanent --add-port=22222/tcp
+sudo firewall-cmd --permanent --add-port=443/tcp
+sudo firewall-cmd --permanent --add-port=161/udp
+sudo firewall-cmd --reload
+
+# Configuración de SELinux
+echo "Configurando SELinux..."
+backup_file /etc/selinux/config
+sudo sed -i 's/^SELINUX=.*/SELINUX=permissive/' /etc/selinux/config
+
+# Configuración de SNMP
+echo "Configurando SNMP..."
+backup_file /etc/snmp/snmpd.conf
+sudo mv /etc/snmp/snmpd.conf /etc/snmp/snmpd.conf.bak
+sudo wget -q -O /etc/snmp/snmpd.conf "$HARDENING_REPO/snmpd.conf"
+sudo systemctl enable --now snmpd
+
+# Configuración de nginx con Docker
+echo "Desplegando Nginx con Docker..."
+sudo mkdir -p /u01/nginx/{certs,conf}
+if ! docker network inspect general-ebc-network > /dev/null 2>&1; then
+    docker network create general-ebc-network
+fi
+docker run --name nginx_ebc -dit --restart unless-stopped --network general-ebc-network -p 80:80 -p 443:443 \
+    -v /u01/nginx/conf:/etc/nginx/conf.d/ -v /u01/nginx/certs:/root nginx
+
+# Configuración de banners y archivos del sistema
+echo "Configurando banners y límites..."
+for file in issue.net issue limits.conf profile login.defs; do
+    backup_file "/etc/$file"
+    sudo wget -q -O "/etc/$file" "$HARDENING_REPO/$file"
+    sudo chmod 0644 "/etc/$file"
+done
+
+# Configuración de SSH
+echo "Configurando SSH..."
+backup_file /etc/ssh/sshd_config
+sudo wget -q -O /etc/ssh/sshd_config "$HARDENING_REPO/sshd_config_9"
+sudo chmod 0600 /etc/ssh/sshd_config
+sudo semanage port -a -t ssh_port_t -p tcp 22222
+sudo systemctl restart sshd
+
+# Bloqueo de módulos no deseados
+echo "Bloqueando módulos USB y Firewire..."
+echo "install usb-storage /bin/true" | sudo tee /etc/modprobe.d/block_usb.conf
+echo "blacklist firewire-core" | sudo tee /etc/modprobe.d/blacklist-firewire.conf
+
+# Configuración de UMASK
+echo "Actualizando UMASK..."
+for file in bashrc csh.cshrc csh.login profile; do
+    backup_file "/etc/$file"
+    sudo sed -i 's/umask [0-9]\+/umask 027/' "/etc/$file"
+done
+
+# Configuración de sysctl
+echo "Aplicando configuraciones de red con sysctl..."
+backup_file /etc/sysctl.conf
+sudo wget -q -O /etc/sysctl.conf "$HARDENING_REPO/sysctl.conf"
+sudo chmod 0644 /etc/sysctl.conf
+sudo sysctl -p
+
+# Instalación de Lynis para auditoría
+echo "Instalando Lynis para auditoría..."
+sudo wget -q -O /etc/yum.repos.d/cisofy-lynis.repo "$HARDENING_REPO/cisofy-lynis.repo"
+sudo dnf install -y lynis
+
+# Configuración de zona horaria
+echo "Estableciendo zona horaria..."
+sudo timedatectl set-timezone America/Mexico_City
+
+# Finalización
+echo "¡Configuración completada con éxito! Reinicia el servidor si es necesario."

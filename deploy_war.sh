@@ -45,10 +45,13 @@ read
 echo "Generando el nuevo archivo WAR"
 jar -cvf "$WAR_NAME" *
 
-# Apagar Tomcat
-echo "Apagando el servicio Tomcat"
-cd "$TOMCAT_PATH/bin"
-./shutdown.sh
+# Extraer el nombre del servicio desde el path de Tomcat
+SERVICE_NAME=$(basename "$TOMCAT_PATH")
+echo "El servicio asociado es: $SERVICE_NAME"
+
+# Apagar Tomcat usando systemctl
+echo "Apagando el servicio Tomcat: $SERVICE_NAME"
+sudo systemctl stop "$SERVICE_NAME.service"
 
 # Limpiar cache y temporales
 cd "$TOMCAT_PATH/temp"
@@ -75,9 +78,14 @@ if [ ! -z "$PID" ]; then
     kill -9 "$PID"
 fi
 
-# Iniciar Tomcat
-echo "Iniciando el servicio Tomcat"
-cd "$TOMCAT_PATH/bin"
-./startup.sh
+# Iniciar Tomcat usando systemctl
+echo "Iniciando el servicio Tomcat: $SERVICE_NAME"
+sudo systemctl start "$SERVICE_NAME.service"
+echo "Proceso completado exitosamente."
+
+# Eliminar el directorio temporal
+echo "Eliminando el directorio temporal: $TEMP_PATH"
+rm -rf "$TEMP_PATH"
 
 echo "Proceso completado exitosamente."
+

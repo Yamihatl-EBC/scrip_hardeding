@@ -1,3 +1,4 @@
+sudo dnf install -y openscap-scanner scap-security-guide
 # Proteger acceso ec2-user
 if [ "$(whoami)" = "ec2-user" ]; then
   echo "Evitando ejecución del script como ec2-user"; exit 0

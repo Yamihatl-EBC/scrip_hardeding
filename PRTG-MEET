@@ -1,0 +1,375 @@
+/*******************************
+ *  PRTG → Google Chat (Apps Script)
+ *  Gmail → OpenAI Responses API → Chat (cardsV2)
+ *******************************/
+
+// ====== CONFIG (APIs y modelo) ======
+const RESPONSES_URL   = 'https://api.openai.com/v1/responses';
+const RESPONSES_MODEL = 'gpt-4o-mini';   // Soporta text.format + json_schema
+const MAX_BODY_CHARS  = 12000;
+
+// ====== Circuit breaker por cuota ======
+function isOpenAIBlocked_() {
+  const p = PropertiesService.getScriptProperties();
+  const until = Number(p.getProperty('OPENAI_BLOCK_UNTIL') || 0);
+  return until && Date.now() < until;
+}
+function setOpenAIBlock_(minutes) {
+  const p = PropertiesService.getScriptProperties();
+  p.setProperty('OPENAI_BLOCK_UNTIL', String(Date.now() + minutes * 60 * 1000));
+}
+function clearOpenAIBlock() {
+  PropertiesService.getScriptProperties().deleteProperty('OPENAI_BLOCK_UNTIL');
+  Logger.log('OPENAI_BLOCK_UNTIL cleared');
+}
+
+// ====== Flujo principal ======
+function processPrtgAlerts() {
+  const props = PropertiesService.getScriptProperties();
+  const apiKey = props.getProperty('OPENAI_API_KEY');
+  const chatWebhook = props.getProperty('CHAT_WEBHOOK_URL');
+  if (!apiKey || !chatWebhook) throw new Error('Faltan OPENAI_API_KEY o CHAT_WEBHOOK_URL');
+
+  const srcLabel  = getOrCreateLabel_('PRTG-ALERT');
+  const doneLabel = getOrCreateLabel_('PRTG/PROCESSED');
+
+  // Limita si quieres: (0, 10)
+  const threads = GmailApp.search('label:"PRTG-ALERT" is:unread newer_than:7d', 0, 50);
+
+  threads.forEach(th => {
+    let openAIBlocked = isOpenAIBlocked_();
+    const msgs = th.getMessages();
+
+    msgs.forEach(msg => {
+      if (!msg.isUnread()) return;
+
+      const subject  = msg.getSubject() || '';
+      const htmlBody = msg.getBody() || '';
+      const plain    = stripHtml_(htmlBody).slice(0, MAX_BODY_CHARS);
+      const hints    = extractPrtgHints_(htmlBody, subject);
+
+      let summary;
+      if (openAIBlocked) {
+        Logger.log('OpenAI bloqueado por cuota; usando resumen local.');
+        summary = localFallbackSummary_(subject, hints);
+      } else {
+        try {
+          summary = summarizeWithOpenAI_(apiKey, subject, plain, hints);
+        } catch (e) {
+          const es = String(e);
+          if (es.includes('OPENAI_429') || es.includes('insufficient_quota')) {
+            Logger.log('Activando bloqueo por cuota (60 min)…');
+            setOpenAIBlock_(60);
+            openAIBlocked = true;
+          } else {
+            Logger.log('Fallo no-429 en summarize: ' + es);
+          }
+          summary = localFallbackSummary_(subject, hints);
+        }
+      }
+
+      postToGoogleChat_(chatWebhook, summary);
+      msg.markRead(); // evita duplicados
+    });
+
+    // Si hubo bloqueo por cuota, NO archivamos ni movemos etiquetas (para reintentar luego)
+    if (!openAIBlocked) {
+      th.addLabel(doneLabel);
+      th.removeLabel(srcLabel);
+      th.moveToArchive();
+    } else {
+      Logger.log('Hilo NO archivado por cuota (se reintentará en el próximo ciclo).');
+    }
+
+    Utilities.sleep(250);
+  });
+}
+
+// ====== Summarization (Responses API) ======
+function localFallbackSummary_(subject, hints) {
+  return {
+    severity: hints?.severity || 'ALTA',
+    device: hints?.device || '',
+    sensor: hints?.sensor || '',
+    status: hints?.status || '',
+    metric: hints?.metric || '',
+    value: hints?.value || '',
+    threshold: hints?.threshold || '',
+    since: hints?.since || '',
+    probable_cause: 'N/D',
+    suggested_action: 'Liberar espacio / limpiar logs/temporales; validar umbrales PRTG',
+    prtg_url: hints?.prtg_url || '',
+    short_summary: hints?.short_summary || subject.slice(0, 160)
+  };
+}
+
+function summarizeWithOpenAI_(apiKey, subject, bodyText, hints) {
+  const system = `Eres un analista NOC. Devuelve SOLO JSON válido según el esquema.
+Si hay campos en HINTS (derivan del HTML de PRTG), úsalos como verdad y solo completa lo que falte.
+Mapea severidades a: CRITICO|ALTA|MEDIA|BAJA|RECUPERADO.`;
+
+  const prompt = `ASUNTO: ${subject}
+
+TEXTO (sin HTML):
+${bodyText}
+
+HINTS (si un campo viene vacío, complétalo tú):
+${JSON.stringify(hints || {}, null, 2)}`;
+
+  // Responses API con text.format (JSON Schema estricto)
+  const payload = {
+    model: RESPONSES_MODEL,
+    input: `${system}\n\n---\n${prompt}`,
+    text: {
+      format: {
+        type: "json_schema",
+        name: "prtg_alert",  // requerido
+        strict: true,        // con strict:true, 'required' debe incluir TODAS las keys
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            severity:          { type: "string", enum: ["CRITICO","ALTA","MEDIA","BAJA","RECUPERADO"] },
+            device:            { type: "string" },
+            sensor:            { type: "string" },
+            status:            { type: "string" },
+            metric:            { type: "string" },
+            value:             { type: "string" },
+            threshold:         { type: "string" },
+            since:             { type: "string" },
+            probable_cause:    { type: "string" },
+            suggested_action:  { type: "string" },
+            prtg_url:          { type: "string" },
+            short_summary:     { type: "string" }
+          },
+          required: [
+            "severity","device","sensor","status","metric","value","threshold",
+            "since","probable_cause","suggested_action","prtg_url","short_summary"
+          ]
+        }
+      }
+    },
+    temperature: 0
+  };
+
+  const raw = callOpenAIResponses_(apiKey, payload);
+  if (!raw) throw new Error('Sin output_text en Responses API.');
+
+  const cleaned = extractJson_(raw);
+  const obj = JSON.parse(cleaned);
+
+  // HINTS como verdad; el modelo completa lo que falte
+  const final = { ...obj, ...hints }; // hints sobreescriben si existen
+
+  if (!final.severity) final.severity = 'ALTA';
+  if (!final.short_summary) final.short_summary = subject.slice(0, 160);
+
+  return final;
+}
+
+// ---- Helper de llamada a OpenAI (/responses) ----
+function callOpenAIResponses_(apiKey, payload) {
+  const res = UrlFetchApp.fetch(RESPONSES_URL, {
+    method: 'post',
+    contentType: 'application/json',
+    headers: { Authorization: `Bearer ${apiKey}` },
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true
+  });
+  const code = res.getResponseCode();
+  const txt  = res.getContentText();
+
+  if (code === 429) {
+    Logger.log('Responses API 429 (quota): ' + txt.slice(0, 1000));
+    throw new Error('OPENAI_429');
+  }
+  if (code !== 200) {
+    Logger.log('Responses API status: ' + code);
+    Logger.log('Responses API body: ' + txt.slice(0, 1500));
+    return '';
+  }
+
+  let data;
+  try { data = JSON.parse(txt); } catch (e) {
+    Logger.log('JSON parse error (responses): ' + e);
+    Logger.log(txt.slice(0, 1500));
+    return '';
+  }
+
+  // Formatos válidos del Responses API
+  if (typeof data.output_text === 'string' && data.output_text.trim()) {
+    return data.output_text.trim();
+  }
+  if (Array.isArray(data.output)) {
+    const msg = data.output[0];
+    if (msg && Array.isArray(msg.content)) {
+      const ot = msg.content.find(c => c && (c.type === 'output_text' || c.type === 'text') && c.text);
+      if (ot && ot.text) return ot.text.trim();
+    }
+  }
+  if (data.error && data.error.message) Logger.log('Responses API error.message: ' + data.error.message);
+  return '';
+}
+
+// ====== Envío a Google Chat (cardsV2) ======
+function postToGoogleChat_(webhookUrl, alert) {
+  const sev = alert.severity || 'ALERTA';
+  const emoji = ({ CRITICO:"🔴", ALTA:"🟠", MEDIA:"🟡", BAJA:"🟢", RECUPERADO:"🟢" })[sev] || "🔔";
+  const headerTitle = `${emoji} PRTG ${sev}${alert.status ? ` — ${alert.status}` : ''}`;
+
+  const dev  = alert.device || '(sin dispositivo)';
+  const sens = alert.sensor || '(sin sensor)';
+  const sum  = alert.short_summary || 'Alerta procesada (sin resumen)';
+
+  // 🔒 Evita URLs en el texto (Meet muestra esto)
+  const cleanSum = sum.replace(/https?:\/\/\S+/g, '').trim();
+
+  // Fallback de texto SIN URL
+  const textFallback = `*${headerTitle}*\n${dev} / ${sens}\n${cleanSum}`;
+
+  const widgets = [
+    alert.device && { decoratedText: { startIcon: { knownIcon: "ROUTER" }, text: `**Dispositivo:** ${alert.device}` } },
+    alert.sensor && { decoratedText: { startIcon: { knownIcon: "DESCRIPTION" }, text: `**Sensor:** ${alert.sensor}` } },
+    (alert.metric || alert.value) && { decoratedText: { startIcon: { knownIcon: "QUERY" }, text: `**Métrica/Valor:** ${[alert.metric, alert.value].filter(Boolean).join(' = ')}` } },
+    alert.threshold && { decoratedText: { startIcon: { knownIcon: "WARNING" }, text: `**Umbral:** ${alert.threshold}` } },
+    alert.since && { decoratedText: { startIcon: { knownIcon: "SCHEDULE" }, text: `**Desde:** ${alert.since}` } },
+    alert.probable_cause && { decoratedText: { startIcon: { knownIcon: "INFO" }, text: `**Causa probable:** ${alert.probable_cause}` } },
+    alert.suggested_action && { decoratedText: { startIcon: { knownIcon: "CHECK_CIRCLE" }, text: `**Acción sugerida:** ${alert.suggested_action}` } }
+  ].filter(Boolean);
+
+  // Botón solo en la tarjeta (se ve en Chat, no en Meet)
+  if (alert.prtg_url) {
+    widgets.push({ buttonList: { buttons: [{ text: "Abrir en PRTG", onClick: { openLink: { url: alert.prtg_url } } }] } });
+  }
+
+  const card = {
+    cardsV2: [{
+      cardId: "prtg-alert",
+      card: {
+        header: { title: headerTitle, subtitle: cleanSum },
+        sections: [{ header: "Detalles", widgets }]
+      }
+    }],
+    text: textFallback
+  };
+
+  UrlFetchApp.fetch(webhookUrl, {
+    method: 'post',
+    contentType: 'application/json',
+    payload: JSON.stringify(card),
+    muteHttpExceptions: true
+  });
+}
+
+// ====== Extractores / Utils ======
+function extractPrtgHints_(html, subject) {
+  const pick = (re) => {
+    const m = html.match(re);
+    return m ? (m[1] || m[0]).trim() : '';
+  };
+
+  const sensor   = pick(/sensor\.htm\?id=\d+">([^<]+)</i);
+  const device   = pick(/device\.htm\?id=\d+">([^<]+)</i);
+  const ip       = pick(/\((\d{1,3}(?:\.\d{1,3}){3})\)/);
+  const prtg_url = pick(/https?:\/\/[^\s"']+\/sensor\.htm\?id=\d+/i);
+  const since    = pick(/Nuevo estado en\s*([^<]+)\s*\(LocalTime\)/i);
+
+  const lastMsg  = pick(/ltimo mensaje[\s\S]*?<b>([^<]+)<\/b>/i) || pick(/Último mensaje[\s\S]*?<b>([^<]+)<\/b>/i);
+  const valuePct = pick(/(\d+)\s*%\s*\(Espacio libre\)/i);
+  const thresholdPct = pick(/l[ií]mite de advertencia\s*(\d+)\s*%/i);
+  const metric   = valuePct ? 'Espacio libre' : '';
+
+  const status = pick(/Nuevo estado[\s\S]*?<b>([^<]+)<\/b>/i) || lastMsg || '';
+  let severity = '';
+  if (/cr[ií]tico|down/i.test(status)) severity = 'CRITICO';
+  else if (/advertencia|warning/i.test(status)) severity = 'ALTA'; // cambia a 'MEDIA' si prefieres
+  else if (/ok|up|recuperad/i.test(status)) severity = 'RECUPERADO';
+  else severity = 'MEDIA';
+
+  const short_summary =
+    valuePct && thresholdPct && (device || sensor)
+      ? `Espacio libre ${valuePct}% en ${device || sensor} (umbral ${thresholdPct}%)`
+      : subject.slice(0, 140);
+
+  return {
+    severity,
+    device: ip ? `${device} (${ip})` : device,
+    sensor,
+    status,
+    metric,
+    value: valuePct ? `${valuePct}%` : '',
+    threshold: thresholdPct ? `${thresholdPct}%` : '',
+    since,
+    prtg_url,
+    short_summary,
+    _source: 'regex'
+  };
+}
+
+function getOrCreateLabel_(name) {
+  return GmailApp.getUserLabelByName(name) || GmailApp.createLabel(name);
+}
+
+function stripHtml_(html) {
+  if (!html) return '';
+  return html
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;|&#160;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// Extrae bloque JSON desde ```json ... ``` o por llaves
+function extractJson_(s) {
+  const fence = s.match(/```json([\s\S]*?)```/i) || s.match(/```([\s\S]*?)```/);
+  if (fence) return fence[1].trim();
+  const start = s.indexOf('{');
+  const end   = s.lastIndexOf('}');
+  if (start >= 0 && end >= start) return s.slice(start, end + 1).trim();
+  throw new Error('No se encontró JSON en la respuesta del modelo.');
+}
+
+// ====== Pruebas rápidas ======
+function testWebhook() {
+  const chatWebhook = PropertiesService.getScriptProperties().getProperty('CHAT_WEBHOOK_URL');
+  const res = UrlFetchApp.fetch(chatWebhook, {
+    method: 'post',
+    contentType: 'application/json',
+    payload: JSON.stringify({ text: 'Prueba ✅ Webhook y permisos OK' })
+  });
+  Logger.log('Chat webhook status: ' + res.getResponseCode());
+}
+
+function testOpenAI() {
+  const apiKey = PropertiesService.getScriptProperties().getProperty('OPENAI_API_KEY');
+
+  // /responses con text.format (JSON schema)
+  const t1 = callOpenAIResponses_(apiKey, {
+    model: RESPONSES_MODEL,
+    input: 'Devuelve {"ok":true} estrictamente en JSON.',
+    text: {
+      format: {
+        type: 'json_schema',
+        name: 'ok',
+        strict: true,
+        schema: {
+          type: 'object',
+          properties: { ok: { type: 'boolean' } },
+          required: ['ok'],
+          additionalProperties: false
+        }
+      }
+    },
+    temperature: 0
+  });
+  Logger.log('responses → ' + t1);
+}
+
+function checkKeyMask() {
+  const k = PropertiesService.getScriptProperties().getProperty('OPENAI_API_KEY');
+  if (!k) { Logger.log('No hay OPENAI_API_KEY'); return; }
+  Logger.log('Key en Script properties: ' + k.substring(0,3) + '...' + k.slice(-4));
+}

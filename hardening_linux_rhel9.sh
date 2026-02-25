@@ -37,7 +37,7 @@ systemctl restart docker
 docker network create general-ebc-network
 mkdir -p /u01/nginx/certs
 mkdir -p /u01/nginx/conf 
-docker run --name nginx_ebc -dit --restart unless-stopped --network general-ebc-network -p 80:80 -p 443:443 -v /u01/nginx/conf:/etc/nginx/conf.d/ -v /u01/nginx/certs:/root -d nginx
+docker run --name nginx_ebc -dit --restart unless-stopped --network general-ebc-network  -p 443:443 -v /u01/nginx/conf:/etc/nginx/conf.d/ -v /u01/nginx/certs:/root -d nginx
 rpm -qa | grep net-snmp
 yum install net-snmp net-snmp-utils -y
 mv /etc/snmp/snmpd.conf /etc/snmp/snmpd.old
